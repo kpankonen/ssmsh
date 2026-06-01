@@ -167,7 +167,7 @@ func createPolicy(policyName string, policyArgs []string) (err error) {
 			}
 			policy.noChangeNotification = append(policy.noChangeNotification, *p)
 		default:
-			return fmt.Errorf("Unable to parse policy type %s with attributes %s", policyType, policyAttributes)
+			return fmt.Errorf("unable to parse policy type %s with attributes %s", policyType, policyAttributes)
 		}
 	}
 	policies[policyName] = policy

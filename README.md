@@ -36,7 +36,7 @@ nix-env -i ssmsh
 
 ## Configuration
 
-Set up [AWS credentials](http://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials).
+Set up [AWS credentials](https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/#specifying-credentials).
 
 You can set up a `.ssmshrc` to configure `ssmsh`. By default, `ssmsh` will load `~/.ssmshrc` if it exists. Use the `-config` argument to set a different path.
 
@@ -55,7 +55,7 @@ A few notes on configuration:
 * When setting the region, the `AWS_REGION` env var takes top priority, followed by the setting in `.ssmshrc`, followed by the value set in the AWS profile (if configured)
 * When setting the profile, the `AWS_PROFILE` env var takes top priority, followed by the setting in `.ssmshrc`
 * If you set a KMS key, it will only work in the region where that key is located. You can use the `key` command while in the shell to change the key.
-* If the configuration file has `output=json`, the results of the `get` and `history` commands will be printed in JSON. The fields of the JSON results will be the same as in the respective Go structs. See the [`Parameter`](https://docs.aws.amazon.com/sdk-for-go/api/service/ssm/#Parameter) and [`ParameterHistory`](https://docs.aws.amazon.com/sdk-for-go/api/service/ssm/#ParameterHistory) docs.
+* If the configuration file has `output=json`, the results of the `get` and `history` commands will be printed in JSON. The fields of the JSON results will be the same as in the respective Go structs. See the [`Parameter`](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/service/ssm/types#Parameter) and [`ParameterHistory`](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/service/ssm/types#ParameterHistory) docs.
 
 ## Usage
 ### Help
@@ -279,18 +279,21 @@ $ ssmsh put name=/dev/app/domain value="www.example.com" type=String description
 MIT
 
 ## Contributing/compiling
-1. Ensure you have at least go v1.17
+1. Ensure you have at least go v1.25
 ```
 $ go version
-go version go1.17.6 darwin/arm64
+go version go1.25.0 darwin/arm64
 ```
-2. Ensure your `$GOPATH` exists and is in your `$PATH`
+2. Ensure `$GOPATH/bin` is in your `$PATH`
 ```
-export GOPATH=$HOME/go
-export PATH=$PATH:$GOROOT/bin:$GOPATH/bin
+export PATH=$PATH:$(go env GOPATH)/bin
 ```
-3. Run `go get github.com/bwhaley/ssmsh`
-4. Run `cd $GOPATH/src/github.com/bwhaley/ssmsh && make` to build and install the binary to `$GOPATH/bin/ssmsh`
+3. Clone the repo and build:
+```
+git clone https://github.com/bwhaley/ssmsh.git
+cd ssmsh
+make
+```
 
 
 ## Related tools
@@ -304,5 +307,5 @@ Tool | Description
 Library | Use
 ------- | -----
 [abiosoft/ishell](https://github.com/abiosoft/ishell) | The interactive shell for golang
-[aws-sdk-go](https://github.com/aws/aws-sdk-go) | The AWS SDK for Go
+[aws-sdk-go-v2](https://github.com/aws/aws-sdk-go-v2) | The AWS SDK for Go
 [mattn/go-shellwords](github.com/mattn/go-shellwords) | Parsing for the shell made easy

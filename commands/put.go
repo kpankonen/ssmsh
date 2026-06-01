@@ -9,8 +9,9 @@ import (
 	"strings"
 
 	"github.com/abiosoft/ishell"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/bwhaley/ssmsh/parameterstore"
 )
 
@@ -64,7 +65,7 @@ func put(c *ishell.Context) {
 
 	if putParamInput.Name == nil ||
 		putParamInput.Value == nil ||
-		putParamInput.Type == nil {
+		putParamInput.Type == "" {
 		shell.Println("Error: name, type and value are required.")
 		return
 	}
@@ -73,20 +74,20 @@ func put(c *ishell.Context) {
 	if err != nil {
 		shell.Println("Error: ", err)
 	} else {
-		version := strconv.Itoa(int(aws.Int64Value(resp.Version)))
+		version := strconv.Itoa(int(resp.Version))
 		if version != "" {
-			shell.Println("Put " + aws.StringValue(putParamInput.Name) + " version " + version)
+			shell.Println("Put " + aws.ToString(putParamInput.Name) + " version " + version)
 		}
 	}
 }
 
 // setDefaults sets parameter settings according to the defaults
 func setDefaults(param *ssm.PutParameterInput) (err error) {
-	param.SetOverwrite(ps.Overwrite)
+	param.Overwrite = aws.Bool(ps.Overwrite)
 	if ps.Key != "" {
-		param.SetKeyId(ps.Key)
+		param.KeyId = aws.String(ps.Key)
 	}
-	param.SetType(ps.Type)
+	param.Type = types.ParameterType(ps.Type)
 	err = validateType(ps.Type)
 	if err != nil {
 		return err
@@ -168,11 +169,11 @@ func validateType(s string) (err error) {
 	validTypes := []string{"String", "StringList", "SecureString"}
 	for i := 0; i < len(validTypes); i++ {
 		if strings.EqualFold(s, validTypes[i]) { // Case insensitive validation of type field
-			putParamInput.Type = aws.String(validTypes[i])
+			putParamInput.Type = types.ParameterType(validTypes[i])
 			return nil
 		}
 	}
-	return fmt.Errorf("Invalid type %s", s)
+	return fmt.Errorf("invalid type %s", s)
 }
 
 func validateValue(s string) (err error) {
@@ -194,27 +195,27 @@ func trimSpaces(s string) string {
 
 func validateName(s string) (err error) {
 	if strings.HasPrefix(s, parameterstore.Delimiter) {
-		putParamInput.SetName(s)
+		putParamInput.Name = aws.String(s)
 	} else {
-		putParamInput.SetName(ps.Cwd + parameterstore.Delimiter + s)
+		putParamInput.Name = aws.String(ps.Cwd + parameterstore.Delimiter + s)
 	}
 	return nil
 }
 
 func validateDescription(s string) (err error) {
-	putParamInput.SetDescription(s)
+	putParamInput.Description = aws.String(s)
 	return nil
 }
 
 // TODO validate key
 func validateKey(s string) (err error) {
-	putParamInput.SetKeyId(s)
+	putParamInput.KeyId = aws.String(s)
 	return nil
 }
 
 // TODO validate pattern
 func validatePattern(s string) (err error) {
-	putParamInput.SetAllowedPattern(s)
+	putParamInput.AllowedPattern = aws.String(s)
 	return nil
 }
 
@@ -224,7 +225,7 @@ func validateOverwrite(s string) (err error) {
 		shell.Println("overwrite must be true or false")
 		return err
 	}
-	putParamInput.SetOverwrite(overwrite)
+	putParamInput.Overwrite = aws.Bool(overwrite)
 	return nil
 }
 
@@ -233,17 +234,16 @@ func validateRegion(s string) (err error) {
 	return nil
 }
 
-const (
-	StandardTier = "Standard"
-	AdvancedTier = "Advanced"
-)
-
 func validateTier(s string) (err error) {
-	if strings.ToLower(s) == StandardTier || strings.ToLower(s) == AdvancedTier {
-		putParamInput.Tier = aws.String(strings.Title(s))
-		return nil
+	switch strings.ToLower(s) {
+	case "standard":
+		putParamInput.Tier = types.ParameterTierStandard
+	case "advanced":
+		putParamInput.Tier = types.ParameterTierAdvanced
+	default:
+		return errors.New("tier must be standard or advanced")
 	}
-	return errors.New("tier must be standard or advanced")
+	return nil
 }
 
 func validatePolicies(s string) (err error) {
@@ -274,6 +274,6 @@ func validatePolicies(s string) (err error) {
 		return err
 	}
 	putParamInput.Policies = aws.String(string(policyBytes))
-	putParamInput.Tier = aws.String(AdvancedTier)
+	putParamInput.Tier = types.ParameterTierAdvanced
 	return nil
 }

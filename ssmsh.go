@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"strings"
 
@@ -41,7 +41,7 @@ func main() {
 		shell.Println("Error initializing session. Is your authentication correct?", err)
 		os.Exit(1)
 	}
-	commands.Init(shell, &ps, &cfg)
+	commands.Init(shell, &ps, cfg.Default.Output)
 
 	if *file == "-" {
 		processStdin(shell)
@@ -61,7 +61,7 @@ func main() {
 }
 
 func processStdin(shell *ishell.Shell) {
-	data, err := ioutil.ReadAll(os.Stdin)
+	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		shell.Println("Error reading from stdin:", err)
 		os.Exit(1)
@@ -70,7 +70,7 @@ func processStdin(shell *ishell.Shell) {
 }
 
 func processFile(shell *ishell.Shell, fn string) {
-	data, err := ioutil.ReadFile(fn)
+	data, err := os.ReadFile(fn)
 	if err != nil {
 		shell.Println("Error reading from file:", err)
 	}
@@ -85,13 +85,13 @@ func processData(shell *ishell.Shell, data string) {
 		}
 		args, err := shellwords.Parse(line)
 		if err != nil {
-			msg := fmt.Errorf("Error parsing %s: %v", line, err)
+			msg := fmt.Errorf("error parsing %s: %v", line, err)
 			shell.Println(msg)
 			os.Exit(1)
 		}
 		err = shell.Process(args...)
 		if err != nil {
-			msg := fmt.Errorf("Error executing %s: %v", line, err)
+			msg := fmt.Errorf("error executing %s: %v", line, err)
 			shell.Println(msg)
 			os.Exit(1)
 		}

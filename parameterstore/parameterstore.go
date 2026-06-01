@@ -1,15 +1,16 @@
 package parameterstore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	spath "path"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ssm"
-	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	saws "github.com/bwhaley/ssmsh/aws"
 	"github.com/bwhaley/ssmsh/config"
 )
@@ -20,16 +21,25 @@ const (
 	DefaultParameterType = "SecureString"
 )
 
+type SSMAPI interface {
+	GetParametersByPath(ctx context.Context, params *ssm.GetParametersByPathInput, optFns ...func(*ssm.Options)) (*ssm.GetParametersByPathOutput, error)
+	GetParameters(ctx context.Context, params *ssm.GetParametersInput, optFns ...func(*ssm.Options)) (*ssm.GetParametersOutput, error)
+	GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
+	GetParameterHistory(ctx context.Context, params *ssm.GetParameterHistoryInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterHistoryOutput, error)
+	PutParameter(ctx context.Context, params *ssm.PutParameterInput, optFns ...func(*ssm.Options)) (*ssm.PutParameterOutput, error)
+	DeleteParameters(ctx context.Context, params *ssm.DeleteParametersInput, optFns ...func(*ssm.Options)) (*ssm.DeleteParametersOutput, error)
+}
+
 // ParameterStore represents the current state and preferences of the shell
 type ParameterStore struct {
-	Cwd       string                     // The current working directory in the hierarchy
-	Decrypt   bool                       // Decrypt values retrieved from Get
-	Type      string                     // Default parameter type (String, SecureString, StringList)
-	Key       string                     // The KMS key to use for SecureString parameters
-	Region    string                     // AWS region on which to operate
-	Overwrite bool                       // Whether or not to overwrite parameters
-	Profile   string                     // Profile to use from .aws/[config|credentials]
-	Clients   map[string]ssmiface.SSMAPI // per-region SSM clients
+	Cwd       string            // The current working directory in the hierarchy
+	Decrypt   bool              // Decrypt values retrieved from Get
+	Type      string            // Default parameter type (String, SecureString, StringList)
+	Key       string            // The KMS key to use for SecureString parameters
+	Region    string            // AWS region on which to operate
+	Overwrite bool              // Whether or not to overwrite parameters
+	Profile   string            // Profile to use from .aws/[config|credentials]
+	Clients   map[string]SSMAPI // per-region SSM clients
 }
 
 // SetConfig sets the shels configuration state
@@ -45,10 +55,11 @@ func (ps *ParameterStore) SetDefaults(cfg config.Config) {
 		ps.Profile = cfg.Default.Profile
 	}
 
-	// Fall back to the default profile
-	if ps.Profile == "" {
-		ps.Profile = "default"
-	}
+	// If no profile was explicitly requested, leave it empty so the AWS SDK
+	// uses its normal credential chain. This allows credentials injected via
+	// environment variables (e.g. by Teleport's `tsh aws --exec`) to be used.
+	// Forcing a "default" profile here would make the SDK resolve credentials
+	// from that profile before considering the environment.
 
 	if cfg.Default.Key != "" {
 		ps.Key = cfg.Default.Key
@@ -72,8 +83,8 @@ func (ps *ParameterStore) SetDefaults(cfg config.Config) {
 func (ps *ParameterStore) NewParameterStore(checkCredentials bool) error {
 	ps.Cwd = Delimiter
 
-	ps.Clients = make(map[string]ssmiface.SSMAPI)
-	ps.Clients[ps.Region] = ssm.New(saws.NewSession(ps.Region, ps.Profile))
+	ps.Clients = make(map[string]SSMAPI)
+	ps.Clients[ps.Region] = ssm.NewFromConfig(saws.LoadConfig(ps.Region, ps.Profile))
 
 	if checkCredentials {
 		// Check for a non-existent parameter to validate credentials & permissions
@@ -87,7 +98,7 @@ func (ps *ParameterStore) NewParameterStore(checkCredentials bool) error {
 
 // InitClient initializes an SSM client in a given region
 func (ps *ParameterStore) InitClient(region string) {
-	ps.Clients[region] = ssm.New(saws.NewSession(region, ps.Profile))
+	ps.Clients[region] = ssm.NewFromConfig(saws.LoadConfig(region, ps.Profile))
 }
 
 // ParameterPath abstracts a parameter to include some metadata
@@ -106,7 +117,7 @@ func (ps *ParameterStore) SetCwd(path ParameterPath) error {
 	if ps.isPath(path) {
 		ps.Cwd = path.Name
 	} else {
-		return errors.New("No such path")
+		return errors.New("no such path")
 	}
 	return nil
 }
@@ -143,14 +154,14 @@ func (ps *ParameterStore) List(ppath ParameterPath, recurse bool, lr chan ListRe
 			return
 		default:
 		}
-		resp, err := ps.Clients[region].GetParametersByPath(params)
+		resp, err := ps.Clients[region].GetParametersByPath(context.TODO(), params)
 		if err != nil {
 			lr <- ListResult{nil, err}
 		}
 		for _, p := range resp.Parameters {
-			results = append(results, aws.StringValue(p.Name))
+			results = append(results, aws.ToString(p.Name))
 		}
-		if aws.StringValue(resp.NextToken) == "" {
+		if resp.NextToken == nil {
 			break
 		}
 		params.NextToken = resp.NextToken
@@ -166,7 +177,7 @@ func (ps *ParameterStore) List(ppath ParameterPath, recurse bool, lr chan ListRe
 		return
 	}
 	if len(param) == 1 {
-		pathParam := aws.StringValue(param[0].Name)
+		pathParam := aws.ToString(param[0].Name)
 		results = append(results, pathParam)
 	}
 
@@ -190,7 +201,7 @@ func (ps *ParameterStore) Remove(params []ParameterPath, recurse bool) (err erro
 				return fmt.Errorf("tried to delete path %s but recursive not requested", param.Name)
 			}
 		} else {
-			return fmt.Errorf("No path or parameter %s was found, aborting", param.Name)
+			return fmt.Errorf("no path or parameter %s was found, aborting", param.Name)
 		}
 	}
 	return ps.deleteByRegion(parametersToDelete)
@@ -204,17 +215,17 @@ func (ps *ParameterStore) recursiveDelete(path ParameterPath) (err error) {
 		Recursive: aws.Bool(true),
 	}
 	for {
-		resp, err := ps.Clients[path.Region].GetParametersByPath(additionalParams)
+		resp, err := ps.Clients[path.Region].GetParametersByPath(context.TODO(), additionalParams)
 		if err != nil {
 			return err
 		}
 		for _, r := range resp.Parameters {
 			parametersToDelete = append(parametersToDelete, ParameterPath{
-				Name:   aws.StringValue(r.Name),
+				Name:   aws.ToString(r.Name),
 				Region: path.Region,
 			})
 		}
-		if aws.StringValue(resp.NextToken) == "" {
+		if resp.NextToken == nil {
 			break
 		}
 		additionalParams.NextToken = resp.NextToken
@@ -253,13 +264,11 @@ func (ps *ParameterStore) delete(params []string, region string) (err error) {
 		ssmParams := &ssm.DeleteParametersInput{
 			Names: ps.inputPaths(deleteBatch),
 		}
-		resp, err := ps.Clients[region].DeleteParameters(ssmParams)
+		resp, err := ps.Clients[region].DeleteParameters(context.TODO(), ssmParams)
 		if err != nil {
 			return err
 		}
-		for _, r := range resp.InvalidParameters {
-			invalidParams = append(invalidParams, aws.StringValue(r))
-		}
+		invalidParams = append(invalidParams, resp.InvalidParameters...)
 	}
 	if len(invalidParams) > 0 {
 		return errors.New("Could not delete invalid parameters " + strings.Join(invalidParams, ","))
@@ -268,20 +277,18 @@ func (ps *ParameterStore) delete(params []string, region string) (err error) {
 }
 
 // GetHistory returns the parameter history
-func (ps *ParameterStore) GetHistory(param ParameterPath) (r []ssm.ParameterHistory, err error) {
+func (ps *ParameterStore) GetHistory(param ParameterPath) (r []types.ParameterHistory, err error) {
 	history := &ssm.GetParameterHistoryInput{
 		Name:           aws.String(fqp(param.Name, ps.Cwd)),
 		WithDecryption: aws.Bool(ps.Decrypt),
 	}
 	for {
-		resp, err := ps.Clients[param.Region].GetParameterHistory(history)
+		resp, err := ps.Clients[param.Region].GetParameterHistory(context.TODO(), history)
 		if err != nil {
 			return nil, err
 		}
-		for _, p := range resp.Parameters {
-			r = append(r, *p)
-		}
-		if aws.StringValue(resp.NextToken) == "" {
+		r = append(r, resp.Parameters...)
+		if resp.NextToken == nil {
 			break
 		}
 		history.NextToken = resp.NextToken
@@ -290,24 +297,22 @@ func (ps *ParameterStore) GetHistory(param ParameterPath) (r []ssm.ParameterHist
 }
 
 // Get retrieves one or more parameters
-func (ps *ParameterStore) Get(params []string, region string) (r []ssm.Parameter, err error) {
+func (ps *ParameterStore) Get(params []string, region string) (r []types.Parameter, err error) {
 	ssmParams := &ssm.GetParametersInput{
 		Names:          ps.inputPaths(params),
 		WithDecryption: aws.Bool(ps.Decrypt),
 	}
-	resp, err := ps.Clients[region].GetParameters(ssmParams)
+	resp, err := ps.Clients[region].GetParameters(context.TODO(), ssmParams)
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range resp.Parameters {
-		r = append(r, *p)
-	}
+	r = append(r, resp.Parameters...)
 	return r, nil
 }
 
 // Put creates or updates a parameter
 func (ps *ParameterStore) Put(param *ssm.PutParameterInput, region string) (resp *ssm.PutParameterOutput, err error) {
-	resp, err = ps.Clients[region].PutParameter(param)
+	resp, err = ps.Clients[region].PutParameter(context.TODO(), param)
 	if err != nil {
 		return resp, err
 	}
@@ -358,7 +363,7 @@ func (ps *ParameterStore) Copy(src, dst ParameterPath, recurse bool) error {
 	} else if srcIsParameter && dstIsPath {
 		return ps.copyParameterToPath(src, dst)
 	} else if srcIsPath && dstIsParameter {
-		return fmt.Errorf("Cannot copy path (%s) to parameter (%s)", src, dst)
+		return fmt.Errorf("cannot copy path (%s) to parameter (%s)", src, dst)
 	} else if srcIsPath {
 		if !recurse {
 			return fmt.Errorf("%s and %s are both paths but recursion not requested. Use -R", src, dst)
@@ -419,7 +424,7 @@ func (ps *ParameterStore) copyPathToPath(newPath bool, srcPath, dstPath Paramete
 		Recursive: aws.Bool(true),
 	}
 	for {
-		resp, err := ps.Clients[srcPath.Region].GetParametersByPath(params)
+		resp, err := ps.Clients[srcPath.Region].GetParametersByPath(context.TODO(), params)
 		if err != nil {
 			return err
 		}
@@ -430,7 +435,7 @@ func (ps *ParameterStore) copyPathToPath(newPath bool, srcPath, dstPath Paramete
 				return err
 			}
 		}
-		if aws.StringValue(resp.NextToken) == "" {
+		if resp.NextToken == nil {
 			break
 		}
 		params.NextToken = resp.NextToken
@@ -439,11 +444,11 @@ func (ps *ParameterStore) copyPathToPath(newPath bool, srcPath, dstPath Paramete
 }
 
 // makeParameterMap returns a map of source param name to dest param name
-func makeParameterMap(params []*ssm.Parameter, newPath bool, srcPath, dstPath ParameterPath) (sourceToDst map[ParameterPath]ParameterPath) {
+func makeParameterMap(params []types.Parameter, newPath bool, srcPath, dstPath ParameterPath) (sourceToDst map[ParameterPath]ParameterPath) {
 	sourceToDst = make(map[ParameterPath]ParameterPath)
 	for _, p := range params {
 		srcParam := ParameterPath{
-			Name:   aws.StringValue(p.Name),
+			Name:   aws.ToString(p.Name),
 			Region: srcPath.Region,
 		}
 		srcPathElements := strings.Split(srcPath.Name, Delimiter)
@@ -476,11 +481,11 @@ func makeParameterMap(params []*ssm.Parameter, newPath bool, srcPath, dstPath Pa
 
 // inputPaths cleans a list of parameter paths and returns strings
 // suitable for use as ssm.Parameters
-func (ps *ParameterStore) inputPaths(paths []string) []*string {
-	var _paths []*string
+func (ps *ParameterStore) inputPaths(paths []string) []string {
+	var _paths []string
 	for i, p := range paths {
 		paths[i] = fqp(p, ps.Cwd)
-		_paths = append(_paths, aws.String(paths[i]))
+		_paths = append(_paths, paths[i])
 	}
 	return _paths
 }
@@ -505,7 +510,7 @@ func (ps *ParameterStore) isParameter(param ParameterPath) bool {
 	p := &ssm.GetParameterInput{
 		Name: aws.String(param.Name),
 	}
-	_, err := ps.Clients[param.Region].GetParameter(p)
+	_, err := ps.Clients[param.Region].GetParameter(context.TODO(), p)
 	return err == nil
 }
 
@@ -516,7 +521,7 @@ func (ps *ParameterStore) isPath(path ParameterPath) bool {
 		Path:      aws.String(path.Name),
 		Recursive: aws.Bool(true),
 	}
-	resp, err := ps.Clients[path.Region].GetParametersByPath(params)
+	resp, err := ps.Clients[path.Region].GetParametersByPath(context.TODO(), params)
 	if err != nil {
 		return false
 	}

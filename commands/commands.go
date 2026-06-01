@@ -2,26 +2,28 @@ package commands
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/abiosoft/ishell"
-	"github.com/bwhaley/ssmsh/config"
 	"github.com/bwhaley/ssmsh/parameterstore"
 )
 
 type fn func(*ishell.Context)
 
 var (
-	shell *ishell.Shell
-	ps    *parameterstore.ParameterStore
-	cfg   *config.Config
+	shell      *ishell.Shell
+	ps         *parameterstore.ParameterStore
+	outputMode string
 )
 
 // Init initializes the ssmsh subcommands
-func Init(iShell *ishell.Shell, iPs *parameterstore.ParameterStore, iCfg *config.Config) {
+func Init(iShell *ishell.Shell, iPs *parameterstore.ParameterStore, output string) {
 	shell = iShell
 	ps = iPs
-	cfg = iCfg
+	outputMode = output
 	registerCommand("cd", "change your relative location within the parameter store", cd, cdUsage)
 	registerCommand("cp", "copy source to dest", cp, cpUsage)
 	registerCommand("decrypt", "toggle parameter decryption", decrypt, decryptUsage)
@@ -99,20 +101,124 @@ func trim(with []string) (without []string) {
 	return without
 }
 
-func printResult(result interface{}) {
-	switch cfg.Default.Output {
-	case "json":
-		printJSON(result)
+func printResult(result any) {
+	cleaned, err := cleanResult(result)
+	if err != nil {
+		shell.Println("Error with result: ", err)
+		return
+	}
+	if outputMode != "json" {
+		shell.Println(formatPlain(cleaned, 0))
+		return
+	}
+	printJSON(cleaned)
+}
+
+func printJSON(result any) {
+	indented, err := json.MarshalIndent(result, "", "    ")
+	if err != nil {
+		shell.Println("Error with result: ", err)
+		return
+	}
+	shell.Println(string(indented))
+}
+
+func cleanResult(result any) (any, error) {
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	return stripNulls(raw), nil
+}
+
+func stripNulls(data []byte) any {
+	var raw any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return raw
+	}
+	return cleanValue(raw)
+}
+
+func cleanValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any)
+		for k, v := range val {
+			if v != nil {
+				cleaned[k] = cleanValue(v)
+			}
+		}
+		return cleaned
+	case []any:
+		for i, item := range val {
+			val[i] = cleanValue(item)
+		}
+		return val
 	default:
-		shell.Printf("%+v\n", result)
+		return v
 	}
 }
 
-func printJSON(result interface{}) {
-	resultJSON, err := json.MarshalIndent(result, "", "    ")
-	if err != nil {
-		shell.Println("Error with result: ", err)
-	} else {
-		shell.Println(string(resultJSON))
+func formatPlain(v any, indent int) string {
+	switch val := v.(type) {
+	case map[string]any:
+		return formatPlainMap(val, indent)
+	case []any:
+		return formatPlainArray(val, indent)
+	case string:
+		return strconv.Quote(val)
+	case float64:
+		if val == float64(int64(val)) {
+			return strconv.FormatInt(int64(val), 10)
+		}
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(val)
+	case nil:
+		return "<nil>"
+	default:
+		return fmt.Sprintf("%v", val)
 	}
+}
+
+func formatPlainMap(m map[string]any, indent int) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	b.WriteString("{\n")
+	for _, k := range keys {
+		b.WriteString(strings.Repeat(" ", indent+4))
+		b.WriteString(k)
+		b.WriteString(": ")
+		b.WriteString(formatPlain(m[k], indent+4))
+		b.WriteString("\n")
+	}
+	b.WriteString(strings.Repeat(" ", indent))
+	b.WriteString("}")
+	return b.String()
+}
+
+func formatPlainArray(items []any, indent int) string {
+	if len(items) == 0 {
+		return "[]"
+	}
+
+	var b strings.Builder
+	b.WriteString("[")
+	for i, item := range items {
+		if i > 0 {
+			b.WriteString("\n")
+			b.WriteString(strings.Repeat(" ", indent+1))
+		}
+		b.WriteString(formatPlain(item, indent))
+	}
+	b.WriteString("]")
+	return b.String()
 }

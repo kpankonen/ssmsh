@@ -1,11 +1,12 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/abiosoft/ishell"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/kms"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	saws "github.com/bwhaley/ssmsh/aws"
 )
 
@@ -26,15 +27,15 @@ func key(c *ishell.Context) {
 }
 
 func checkKey(key string) (err error) {
-	client := kms.New(saws.NewSession(ps.Region, ps.Profile))
+	client := kms.NewFromConfig(saws.LoadConfig(ps.Region, ps.Profile))
 	input := kms.ListKeysInput{}
 	for {
-		resp, err := client.ListKeys(&input)
+		resp, err := client.ListKeys(context.TODO(), &input)
 		if err != nil {
 			return err
 		}
 		for _, keyEntry := range resp.Keys {
-			if aws.StringValue(keyEntry.KeyId) == key || aws.StringValue(keyEntry.KeyArn) == key {
+			if aws.ToString(keyEntry.KeyId) == key || aws.ToString(keyEntry.KeyArn) == key {
 				return nil
 			}
 		}

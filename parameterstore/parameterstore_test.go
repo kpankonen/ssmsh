@@ -1,60 +1,60 @@
 package parameterstore_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ssm"
-	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/bwhaley/ssmsh/parameterstore"
 )
 
-var EddardStark = &ssm.Parameter{
+var EddardStark = types.Parameter{
 	Name:  aws.String("/House/Stark/EddardStark"),
-	Type:  aws.String("String"),
+	Type:  types.ParameterTypeString,
 	Value: aws.String("Lord"),
 }
 
-var CatelynStark = &ssm.Parameter{
+var CatelynStark = types.Parameter{
 	Name:  aws.String("/House/Stark/CatelynStark"),
-	Type:  aws.String("String"),
+	Type:  types.ParameterTypeString,
 	Value: aws.String("Lady"),
 }
 
-var RobStark = &ssm.Parameter{
+var RobStark = types.Parameter{
 	Name:  aws.String("/House/Stark/RobStark"),
-	Type:  aws.String("String"),
+	Type:  types.ParameterTypeString,
 	Value: aws.String("Noble"),
 }
 
-var JonSnow = &ssm.Parameter{
+var JonSnow = types.Parameter{
 	Name:  aws.String("/House/Stark/JonSnow"),
-	Type:  aws.String("String"),
+	Type:  types.ParameterTypeString,
 	Value: aws.String("Bastard"),
 }
 
-var DaenerysTargaryen = &ssm.Parameter{
+var DaenerysTargaryen = types.Parameter{
 	Name:  aws.String("/House/Targaryen/DaenerysTargaryen"),
-	Type:  aws.String("String"),
+	Type:  types.ParameterTypeString,
 	Value: aws.String("Noble"),
 }
 
-var HouseStark = []*ssm.Parameter{
+var HouseStark = []types.Parameter{
 	EddardStark,
 	CatelynStark,
 	RobStark,
 }
 
-var HouseTargaryen = []*ssm.Parameter{
+var HouseTargaryen = []types.Parameter{
 	DaenerysTargaryen,
 }
 
 const NextToken = "A1B2C3D4"
 
 type mockedSSM struct {
-	ssmiface.SSMAPI
 	GetParametersByPathResp ssm.GetParametersByPathOutput
 	GetParametersByPathNext ssm.GetParametersByPathOutput
 	GetParameterHistoryResp ssm.GetParameterHistoryOutput
@@ -64,48 +64,48 @@ type mockedSSM struct {
 	PutParameterResp        ssm.PutParameterOutput
 }
 
-func (m mockedSSM) GetParametersByPath(in *ssm.GetParametersByPathInput) (*ssm.GetParametersByPathOutput, error) {
-	if aws.StringValue(in.NextToken) != "" {
+func (m mockedSSM) GetParametersByPath(_ context.Context, in *ssm.GetParametersByPathInput, _ ...func(*ssm.Options)) (*ssm.GetParametersByPathOutput, error) {
+	if in.NextToken != nil {
 		return &m.GetParametersByPathNext, nil
 	}
 	return &m.GetParametersByPathResp, nil
 }
 
-func (m mockedSSM) DeleteParameters(in *ssm.DeleteParametersInput) (*ssm.DeleteParametersOutput, error) {
+func (m mockedSSM) DeleteParameters(_ context.Context, in *ssm.DeleteParametersInput, _ ...func(*ssm.Options)) (*ssm.DeleteParametersOutput, error) {
 	return &m.DeleteParametersResp, nil
 }
 
-func (m mockedSSM) GetParameter(in *ssm.GetParameterInput) (*ssm.GetParameterOutput, error) {
-	parameterName := aws.StringValue(in.Name)
+func (m mockedSSM) GetParameter(_ context.Context, in *ssm.GetParameterInput, _ ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+	parameterName := aws.ToString(in.Name)
 	for _, param := range m.GetParameterResp {
-		if aws.StringValue(param.Parameter.Name) == parameterName {
+		if aws.ToString(param.Parameter.Name) == parameterName {
 			return &param, nil
 		}
 	}
 	return nil, errors.New("Parameter not found")
 }
 
-func (m mockedSSM) GetParameterHistory(in *ssm.GetParameterHistoryInput) (*ssm.GetParameterHistoryOutput, error) {
+func (m mockedSSM) GetParameterHistory(_ context.Context, in *ssm.GetParameterHistoryInput, _ ...func(*ssm.Options)) (*ssm.GetParameterHistoryOutput, error) {
 	return &m.GetParameterHistoryResp, nil
 }
 
-func (m mockedSSM) GetParameters(in *ssm.GetParametersInput) (*ssm.GetParametersOutput, error) {
+func (m mockedSSM) GetParameters(_ context.Context, in *ssm.GetParametersInput, _ ...func(*ssm.Options)) (*ssm.GetParametersOutput, error) {
 	for _, n := range in.Names {
 		input := &ssm.GetParameterInput{
-			Name:           n,
+			Name:           aws.String(n),
 			WithDecryption: aws.Bool(true),
 		}
-		parameter, err := m.GetParameter(input)
+		parameter, err := m.GetParameter(context.TODO(), input)
 		if err != nil {
 			m.GetParametersResp.InvalidParameters = append(m.GetParametersResp.InvalidParameters, n)
 		} else {
-			m.GetParametersResp.Parameters = append(m.GetParametersResp.Parameters, parameter.Parameter)
+			m.GetParametersResp.Parameters = append(m.GetParametersResp.Parameters, *parameter.Parameter)
 		}
 	}
 	return &m.GetParametersResp, nil
 }
 
-func (m mockedSSM) PutParameter(in *ssm.PutParameterInput) (*ssm.PutParameterOutput, error) {
+func (m mockedSSM) PutParameter(_ context.Context, in *ssm.PutParameterInput, _ ...func(*ssm.Options)) (*ssm.PutParameterOutput, error) {
 	return &m.PutParameterResp, nil
 }
 
@@ -119,21 +119,21 @@ func TestPut(t *testing.T) {
 	p.Cwd = parameterstore.Delimiter
 	p.Clients[p.Region] = mockedSSM{
 		PutParameterResp: ssm.PutParameterOutput{
-			Version: aws.Int64(expectedVersion),
+			Version: expectedVersion,
 		},
 	}
 	putParameterInput := ssm.PutParameterInput{
 		Name:        aws.String("/House/Stark/EddardStark"),
 		Value:       aws.String("Lord"),
 		Description: aws.String("Lord of Winterfell in Season 1"),
-		Type:        aws.String("String"),
+		Type:        types.ParameterTypeString,
 	}
 	resp, err := p.Put(&putParameterInput, p.Region)
 	if err != nil {
 		t.Fatal("Error putting parameter", err)
 	} else {
-		if aws.Int64Value(resp.Version) != expectedVersion {
-			msg := fmt.Errorf("expected %d, got %d", expectedVersion, aws.Int64Value(resp.Version))
+		if resp.Version != expectedVersion {
+			msg := fmt.Errorf("expected %d, got %d", expectedVersion, resp.Version)
 			t.Fatal(msg)
 		}
 	}
@@ -158,35 +158,35 @@ func TestMoveParameter(t *testing.T) {
 	p.Clients[p.Region] = mockedSSM{
 		GetParameterResp: []ssm.GetParameterOutput{
 			{
-				Parameter: &ssm.Parameter{
+				Parameter: &types.Parameter{
 					Name:  aws.String(srcParam.Name),
-					Type:  aws.String("String"),
+					Type:  types.ParameterTypeString,
 					Value: aws.String("Noble"),
 				},
 			},
 			{
-				Parameter: &ssm.Parameter{
+				Parameter: &types.Parameter{
 					Name:  aws.String(dstParam.Name),
-					Type:  aws.String("String"),
+					Type:  types.ParameterTypeString,
 					Value: aws.String("Noble"),
 				},
 			},
 		},
 		GetParameterHistoryResp: ssm.GetParameterHistoryOutput{
-			Parameters: []*ssm.ParameterHistory{
+			Parameters: []types.ParameterHistory{
 				{
 					Name:        aws.String(srcParam.Name),
 					Value:       aws.String("Noble"),
-					Type:        aws.String("String"),
+					Type:        types.ParameterTypeString,
 					Description: aws.String("Eldest daughter of House Stark, bethrothed to Tyrion Lannister"),
-					Version:     aws.Int64(2),
+					Version:     2,
 				},
 				{
 					Name:        aws.String(srcParam.Name),
 					Value:       aws.String("Noble"),
-					Type:        aws.String("String"),
+					Type:        types.ParameterTypeString,
 					Description: aws.String("Eldest daughter of House Stark"),
-					Version:     aws.Int64(1),
+					Version:     1,
 				},
 			},
 		},
@@ -198,9 +198,9 @@ func TestMoveParameter(t *testing.T) {
 	p.Clients[p.Region] = mockedSSM{
 		GetParameterResp: []ssm.GetParameterOutput{
 			{
-				Parameter: &ssm.Parameter{
+				Parameter: &types.Parameter{
 					Name:  aws.String(dstParam.Name),
-					Type:  aws.String("String"),
+					Type:  types.ParameterTypeString,
 					Value: aws.String("Noble"),
 				},
 			},
@@ -244,28 +244,26 @@ func TestCopyPath(t *testing.T) {
 	bothHouses := append(HouseStark, HouseTargaryen...)
 	p.Clients[p.Region] = mockedSSM{
 		GetParameterResp: []ssm.GetParameterOutput{
-			{Parameter: EddardStark},
-			{Parameter: CatelynStark},
-			{Parameter: RobStark},
-			{Parameter: JonSnow},
-			{Parameter: DaenerysTargaryen},
+			{Parameter: &EddardStark},
+			{Parameter: &CatelynStark},
+			{Parameter: &RobStark},
+			{Parameter: &JonSnow},
+			{Parameter: &DaenerysTargaryen},
 		},
 		GetParametersByPathResp: ssm.GetParametersByPathOutput{
 			Parameters: bothHouses,
 			NextToken:  aws.String(NextToken),
 		},
 		GetParametersByPathNext: ssm.GetParametersByPathOutput{
-			Parameters: []*ssm.Parameter{JonSnow},
-			NextToken:  aws.String(""),
+			Parameters: []types.Parameter{JonSnow},
 		},
 		GetParameterHistoryResp: ssm.GetParameterHistoryOutput{
-			Parameters: []*ssm.ParameterHistory{
+			Parameters: []types.ParameterHistory{
 				{
 					Name:    aws.String("/House/Stark/EddardStark"),
-					Version: aws.Int64(2),
+					Version: 2,
 				},
 			},
-			NextToken: aws.String(""),
 		},
 	}
 	err = p.Copy(srcPath, dstPath, true)
@@ -281,7 +279,7 @@ func TestCopyPath(t *testing.T) {
 		t.Fatal("Error getting history: ", err)
 	}
 	if len(resp) != 1 {
-		msg := fmt.Errorf("Expected history of length 1, got %s", resp)
+		msg := fmt.Errorf("Expected history of length 1, got %v", resp)
 		t.Fatal(msg)
 	}
 }
@@ -305,35 +303,35 @@ func TestCopyParameter(t *testing.T) {
 	p.Clients[p.Region] = mockedSSM{
 		GetParameterResp: []ssm.GetParameterOutput{
 			{
-				Parameter: &ssm.Parameter{
+				Parameter: &types.Parameter{
 					Name:  aws.String("/House/Stark/JonSnow"),
-					Type:  aws.String("String"),
+					Type:  types.ParameterTypeString,
 					Value: aws.String("King"),
 				},
 			},
 			{
-				Parameter: &ssm.Parameter{
+				Parameter: &types.Parameter{
 					Name:  aws.String("/House/Targaryen/JonSnow"),
-					Type:  aws.String("String"),
+					Type:  types.ParameterTypeString,
 					Value: aws.String("King"),
 				},
 			},
 		},
 		GetParameterHistoryResp: ssm.GetParameterHistoryOutput{
-			Parameters: []*ssm.ParameterHistory{
+			Parameters: []types.ParameterHistory{
 				{
 					Name:        aws.String("/House/Stark/JonSnow"),
 					Value:       aws.String("King"),
-					Type:        aws.String("String"),
+					Type:        types.ParameterTypeString,
 					Description: aws.String("King of the north"),
-					Version:     aws.Int64(2),
+					Version:     2,
 				},
 				{
 					Name:        aws.String("/House/Stark/JonSnow"),
 					Value:       aws.String("Bastard"),
-					Type:        aws.String("String"),
+					Type:        types.ParameterTypeString,
 					Description: aws.String("Bastard of Winterfell"),
-					Version:     aws.Int64(1),
+					Version:     1,
 				},
 			},
 		},
@@ -350,8 +348,8 @@ func TestCopyParameter(t *testing.T) {
 		Name:   "/House/Targaryen/JonSnow",
 		Region: "region",
 	}
-	if aws.StringValue(resp[0].Name) != expectedName.Name {
-		msg := fmt.Errorf("expected %s, got %s", expectedName.Name, aws.StringValue(resp[0].Name))
+	if aws.ToString(resp[0].Name) != expectedName.Name {
+		msg := fmt.Errorf("expected %s, got %s", expectedName.Name, aws.ToString(resp[0].Name))
 		t.Fatal(msg)
 	}
 }
@@ -369,14 +367,13 @@ func TestCwd(t *testing.T) {
 		{
 			Path: "/House/Stark/..///Deceased",
 			GetParametersByPathResp: ssm.GetParametersByPathOutput{
-				Parameters: []*ssm.Parameter{
+				Parameters: []types.Parameter{
 					{
 						Name:  aws.String("/House/Stark/EddardStark"),
-						Type:  aws.String("String"),
+						Type:  types.ParameterTypeString,
 						Value: aws.String("Lord"),
 					},
 				},
-				NextToken: aws.String(""),
 			},
 			Expected: "/House/Deceased",
 		},
@@ -435,12 +432,12 @@ func TestDelete(t *testing.T) {
 		},
 	}
 	deleteParametersOutput := ssm.DeleteParametersOutput{
-		DeletedParameters: []*string{
-			aws.String("/House/Stark/EddardStark"),
-			aws.String("/House/Stark/CatelynStark"),
+		DeletedParameters: []string{
+			"/House/Stark/EddardStark",
+			"/House/Stark/CatelynStark",
 		},
-		InvalidParameters: []*string{
-			aws.String("/House/Stark/TyrionLannister"),
+		InvalidParameters: []string{
+			"/House/Stark/TyrionLannister",
 		},
 	}
 
@@ -466,17 +463,16 @@ func TestGetHistory(t *testing.T) {
 		Region: "region",
 	}
 	getHistoryOutput := ssm.GetParameterHistoryOutput{
-		Parameters: []*ssm.ParameterHistory{
+		Parameters: []types.ParameterHistory{
 			{
 				Name:    aws.String("/House/Stark/EddardStark"),
-				Version: aws.Int64(2),
+				Version: 2,
 			},
 			{
 				Name:    aws.String("/House/Stark/EddardStark"),
-				Version: aws.Int64(1),
+				Version: 1,
 			},
 		},
-		NextToken: aws.String(""),
 	}
 	var p parameterstore.ParameterStore
 	p.Region = "region"
@@ -493,7 +489,7 @@ func TestGetHistory(t *testing.T) {
 		t.Fatal(msg)
 	}
 	if len(resp) != 2 {
-		msg := fmt.Errorf("Expected history of length 2, got %s", resp)
+		msg := fmt.Errorf("Expected history of length 2, got %v", resp)
 		t.Fatal(msg)
 	}
 }
@@ -514,17 +510,16 @@ func TestList(t *testing.T) {
 			},
 			Recurse: false,
 			GetParametersByPathResp: ssm.GetParametersByPathOutput{
-				Parameters: []*ssm.Parameter{},
-				NextToken:  aws.String(""),
+				Parameters: []types.Parameter{},
 			},
 			Expected: []string{
 				"/House/Stark/EddardStark",
 			},
 			GetParametersResp: ssm.GetParametersOutput{
-				Parameters: []*ssm.Parameter{
+				Parameters: []types.Parameter{
 					{
 						Name:  aws.String("/House/Stark/EddardStark"),
-						Type:  aws.String("String"),
+						Type:  types.ParameterTypeString,
 						Value: aws.String("Lord"),
 					},
 				},
@@ -539,10 +534,10 @@ func TestList(t *testing.T) {
 				"root",
 			},
 			GetParametersResp: ssm.GetParametersOutput{
-				Parameters: []*ssm.Parameter{
+				Parameters: []types.Parameter{
 					{
 						Name:  aws.String("root"),
-						Type:  aws.String("String"),
+						Type:  types.ParameterTypeString,
 						Value: aws.String("A root parameter"),
 					},
 				},
@@ -556,7 +551,6 @@ func TestList(t *testing.T) {
 			Recurse: false,
 			GetParametersByPathResp: ssm.GetParametersByPathOutput{
 				Parameters: HouseStark,
-				NextToken:  aws.String(""),
 			},
 			Expected: []string{
 				"EddardStark",
@@ -575,8 +569,7 @@ func TestList(t *testing.T) {
 				NextToken:  aws.String(NextToken),
 			},
 			GetParametersByPathNext: ssm.GetParametersByPathOutput{
-				Parameters: []*ssm.Parameter{JonSnow, DaenerysTargaryen},
-				NextToken:  aws.String(""),
+				Parameters: []types.Parameter{JonSnow, DaenerysTargaryen},
 			},
 			Expected: []string{
 				"/House/Stark/EddardStark",
